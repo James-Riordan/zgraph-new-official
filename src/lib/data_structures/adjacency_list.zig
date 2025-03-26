@@ -31,8 +31,6 @@ pub fn AdjacencyList(comptime directed: bool, comptime weighted: bool) type {
         }
 
         pub fn removeNode(self: *@This(), node_id: u64) !void {
-            std.debug.print("\n[REMOVE NODE] START: Removing node {}\n", .{node_id});
-
             if (self.adjacency.getPtr(node_id)) |edges| {
                 edges.deinit();
                 _ = self.adjacency.remove(node_id);
@@ -46,7 +44,6 @@ pub fn AdjacencyList(comptime directed: bool, comptime weighted: bool) type {
                     var i: usize = 0;
                     while (i < edges.items.len) {
                         if (edges.items[i].dst == node_id) {
-                            std.debug.print("[REMOVE NODE] Removing incoming edge {} -> {}\n", .{ entry.key_ptr.*, node_id });
                             _ = edges.orderedRemove(i);
                         } else {
                             i += 1;
@@ -54,8 +51,6 @@ pub fn AdjacencyList(comptime directed: bool, comptime weighted: bool) type {
                     }
                 }
             }
-
-            std.debug.print("[REMOVE NODE] COMPLETED removal of node {}\n", .{node_id});
         }
 
         pub fn addEdge(self: *@This(), src: u64, dst: u64, weight: if (weighted) ?f64 else void) !void {
@@ -77,22 +72,26 @@ pub fn AdjacencyList(comptime directed: bool, comptime weighted: bool) type {
             }
         }
 
-        pub fn removeEdge(self: *@This(), src: u64, dst: u64) void {
+        pub fn removeEdge(self: *@This(), src: u64, dst: u64) !void {
             if (self.adjacency.getPtr(src)) |edges| {
-                removeEdgeHelper(edges, dst);
+                try removeEdgeHelper(edges, dst);
                 if (edges.items.len == 0) {
                     edges.deinit();
-                    _ = self.adjacency.remove(src); // ✅ No `try`, since it returns `bool`
+                    _ = self.adjacency.remove(src); // ✅ Still returns `bool`, so no `try` needed
                 }
+            } else {
+                return error.EdgeNotFound;
             }
 
             if (!directed) {
                 if (self.adjacency.getPtr(dst)) |edges| {
-                    removeEdgeHelper(edges, src);
+                    try removeEdgeHelper(edges, src);
                     if (edges.items.len == 0) {
                         edges.deinit();
-                        _ = self.adjacency.remove(dst); // ✅ No `try`
+                        _ = self.adjacency.remove(dst);
                     }
+                } else {
+                    return error.EdgeNotFound;
                 }
             }
 
@@ -110,13 +109,13 @@ pub fn AdjacencyList(comptime directed: bool, comptime weighted: bool) type {
             }
         }
 
-        fn removeEdgeHelper(edges: *std.ArrayList(Edge(weighted)), target: u64) void {
+        fn removeEdgeHelper(edges: *std.ArrayList(Edge(weighted)), target: u64) !void {
             var i: usize = 0;
             var removed: bool = false;
 
             while (i < edges.items.len) {
                 if (edges.items[i].dst == target) {
-                    _ = edges.orderedRemove(i); // ✅ No need for `catch`
+                    _ = edges.orderedRemove(i);
                     removed = true;
                     break;
                 }
@@ -124,7 +123,7 @@ pub fn AdjacencyList(comptime directed: bool, comptime weighted: bool) type {
             }
 
             if (!removed) {
-                std.debug.print("[WARNING] Attempted to remove a non-existent edge: {}\n", .{target});
+                return error.EdgeNotFound;
             }
         }
 
@@ -164,7 +163,7 @@ test "AdjacencyList: Removing an isolated node works correctly" {
     defer list.deinit();
 
     try list.addNode(7);
-    list.removeNode(7) catch |err| std.debug.print("[ERROR] Failed to remove node: {}\n", .{err});
+    try list.removeNode(7);
 
     try std.testing.expect(list.getNeighbors(7) == null);
 }
@@ -184,8 +183,15 @@ test "AdjacencyList: Add and Remove Edges" {
     try std.testing.expect(list.getNeighbors(1) != null);
     try std.testing.expectEqual(@as(usize, 1), list.getNeighbors(1).?.items.len);
 
-    list.removeEdge(1, 2);
+    try list.removeEdge(1, 2);
     try std.testing.expectEqual(@as(usize, 0), if (list.getNeighbors(1)) |edges| edges.items.len else 0);
+}
+
+test "AdjacencyList: Removing a non-existent edge should return an error" {
+    var list = AdjacencyList(true, true).init(std.testing.allocator);
+    defer list.deinit();
+
+    try std.testing.expectError(error.EdgeNotFound, list.removeEdge(1, 2));
 }
 
 test "AdjacencyList: Adding duplicate edges should increase count" {
@@ -198,22 +204,6 @@ test "AdjacencyList: Adding duplicate edges should increase count" {
     try std.testing.expectEqual(@as(usize, 2), list.getNeighbors(1).?.items.len);
 }
 
-test "AdjacencyList: Removing a non-existent edge should not crash" {
-    var list = AdjacencyList(true, true).init(std.testing.allocator);
-    defer list.deinit();
-
-    list.removeEdge(1, 2);
-    try std.testing.expectEqual(@as(usize, 0), list.adjacency.count());
-}
-
-test "AdjacencyList: Adding edges to a non-existent node should create it" {
-    var list = AdjacencyList(true, true).init(std.testing.allocator);
-    defer list.deinit();
-
-    try list.addEdge(10, 20, 1.5);
-    try std.testing.expect(list.getNeighbors(10) != null);
-}
-
 test "AdjacencyList: Removing a node should remove all associated edges" {
     var list = AdjacencyList(true, true).init(std.testing.allocator);
     defer list.deinit();
@@ -222,11 +212,10 @@ test "AdjacencyList: Removing a node should remove all associated edges" {
     try list.addEdge(1, 3, 3.0);
     try list.addEdge(2, 3, 2.0);
 
-    try list.removeNode(1); // 🔥 Ensure proper error handling
+    try list.removeNode(1);
 
-    // ✅ Check edges were removed correctly
     try std.testing.expect(list.getNeighbors(1) == null);
-    try std.testing.expect(list.getNeighbors(2) != null); // Ensure node 2 still exists
+    try std.testing.expect(list.getNeighbors(2) != null);
     try std.testing.expectEqual(@as(usize, 1), list.getNeighbors(2).?.items.len);
 }
 
@@ -240,15 +229,12 @@ test "AdjacencyList: Removing a node with many connections removes all reference
     try list.addEdge(1, 5, 8.0);
     try list.addEdge(1, 6, 9.0);
 
-    // Ensure all neighbors exist before removal
     try std.testing.expectEqual(@as(usize, 5), list.getNeighbors(1).?.items.len);
 
-    list.removeNode(1) catch |err| std.debug.print("[ERROR] Failed to remove node: {}\n", .{err});
+    try list.removeNode(1);
 
-    // Ensure Node 1 is gone
     try std.testing.expect(list.getNeighbors(1) == null);
 
-    // Ensure other nodes are still there, but no reference to Node 1
     for ([_]u64{ 2, 3, 4, 5, 6 }) |n| {
         try std.testing.expect(list.getNeighbors(n) != null);
         try std.testing.expectEqual(@as(usize, 0), list.getNeighbors(n).?.items.len);
@@ -259,11 +245,11 @@ test "AdjacencyList: Removing self-loop should work correctly" {
     var list = AdjacencyList(true, true).init(std.testing.allocator);
     defer list.deinit();
 
-    try list.addEdge(1, 1, 2.5); // ✅ Self-loop
+    try list.addEdge(1, 1, 2.5);
 
     try std.testing.expectEqual(@as(usize, 1), list.getNeighbors(1).?.items.len);
 
-    list.removeEdge(1, 1);
+    try list.removeEdge(1, 1);
 
     try std.testing.expectEqual(@as(usize, 0), if (list.getNeighbors(1)) |edges| edges.items.len else 0);
 }
@@ -276,45 +262,33 @@ test "AdjacencyList: Can handle multiple self-loops and remove them correctly" {
     try list.addEdge(1, 1, 3.0);
     try list.addEdge(1, 1, 3.5);
 
-    list.removeEdge(1, 1);
-    try std.testing.expectEqual(@as(usize, 2), if (list.getNeighbors(1)) |edges| edges.items.len else 0);
+    try std.testing.expectEqual(@as(usize, 3), list.getNeighbors(1).?.items.len);
 
-    list.removeEdge(1, 1);
-    try std.testing.expectEqual(@as(usize, 1), if (list.getNeighbors(1)) |edges| edges.items.len else 0);
+    try list.removeEdge(1, 1);
+    try std.testing.expectEqual(@as(usize, 2), list.getNeighbors(1).?.items.len);
 
-    list.removeEdge(1, 1);
+    try list.removeEdge(1, 1);
+    try std.testing.expectEqual(@as(usize, 1), list.getNeighbors(1).?.items.len);
+
+    try list.removeEdge(1, 1);
     try std.testing.expectEqual(@as(usize, 0), if (list.getNeighbors(1)) |edges| edges.items.len else 0);
 }
 
 test "AdjacencyList: Removing a node in an undirected graph removes incoming edges" {
-    var list = AdjacencyList(false, true).init(std.testing.allocator); // ❗ `false` for undirected
+    var list = AdjacencyList(false, true).init(std.testing.allocator);
     defer list.deinit();
 
     try list.addEdge(1, 2, 4.5);
     try list.addEdge(1, 3, 3.0);
     try list.addEdge(2, 3, 2.0);
 
-    std.debug.print("[DEBUG] Neighbors before removal:\n", .{});
-    std.debug.print(" - Node 1: {}\n", .{if (list.getNeighbors(1)) |edges| edges.items.len else 0});
-    std.debug.print(" - Node 2: {}\n", .{if (list.getNeighbors(2)) |edges| edges.items.len else 0});
-    std.debug.print(" - Node 3: {}\n", .{if (list.getNeighbors(3)) |edges| edges.items.len else 0});
+    try list.removeNode(2);
 
-    list.removeNode(2) catch |err| std.debug.print("[ERROR] Failed to remove node: {}\n", .{err});
-
-    std.debug.print("[DEBUG] Neighbors after removal:\n", .{});
-    std.debug.print(" - Node 1: {}\n", .{if (list.getNeighbors(1)) |edges| edges.items.len else 0});
-    std.debug.print(" - Node 3: {}\n", .{if (list.getNeighbors(3)) |edges| edges.items.len else 0});
-
-    // ✅ Ensure Node 2 is fully removed
     try std.testing.expect(list.getNeighbors(2) == null);
-
-    // ✅ Ensure Node 1 still exists before checking edges
     try std.testing.expect(list.getNeighbors(1) != null);
     try std.testing.expectEqual(@as(usize, 1), list.getNeighbors(1).?.items.len);
-
-    // ✅ Ensure Node 3 still exists before checking edges
     try std.testing.expect(list.getNeighbors(3) != null);
-    try std.testing.expectEqual(@as(usize, 1), list.getNeighbors(3).?.items.len); // ❗ Fix: Should be 1, not 2
+    try std.testing.expectEqual(@as(usize, 1), list.getNeighbors(3).?.items.len);
 }
 
 test "AdjacencyList: Adding edge should auto-create nodes" {
@@ -330,8 +304,7 @@ test "AdjacencyList: Removing a non-existent edge does nothing" {
     var list = AdjacencyList(true, true).init(std.testing.allocator);
     defer list.deinit();
 
-    list.removeEdge(42, 99);
-    try std.testing.expectEqual(@as(usize, 0), list.adjacency.count());
+    try std.testing.expectError(error.EdgeNotFound, list.removeEdge(42, 99));
 }
 
 test "AdjacencyList: Removing last edge removes empty nodes" {
@@ -341,9 +314,8 @@ test "AdjacencyList: Removing last edge removes empty nodes" {
     try list.addEdge(1, 2, 5.0);
     try std.testing.expect(list.getNeighbors(1) != null);
 
-    list.removeEdge(1, 2);
+    try list.removeEdge(1, 2);
 
-    // Ensure nodes were removed when empty
     try std.testing.expect(list.getNeighbors(1) == null);
     try std.testing.expect(list.getNeighbors(2) == null);
 }
@@ -355,9 +327,6 @@ test "AdjacencyList: Memory is properly freed on deinit" {
     try list.addEdge(3, 4, 1.2);
 
     list.deinit(); // ✅ Should release all memory with no leaks
-
-    // Check that accessing after deinit is invalid (should crash in Debug mode)
-    // try std.testing.expect(list.getNeighbors(1) == null);
 }
 
 test "AdjacencyList: Can handle large graphs efficiently" {

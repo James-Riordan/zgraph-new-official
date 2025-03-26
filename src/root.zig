@@ -4,13 +4,20 @@ const std = @import("std");
 pub const Graph = @import("lib/core/graph.zig").Graph;
 pub const Node = @import("lib/core/node.zig").Node;
 pub const Edge = @import("lib/core/edge.zig").Edge;
+pub const GraphStorage = @import("lib/core/graph_storage.zig").GraphStorage;
 
 // ✅ Data Structures (Graph Representations)
 pub const AdjacencyList = @import("lib/data_structures/adjacency_list.zig");
 pub const AdjacencyMatrix = @import("lib/data_structures/adjacency_matrix.zig");
 pub const IncidenceMatrix = @import("lib/data_structures/incidence_matrix.zig");
+
 // pub const LaplacianMatrix = @import("lib/data_structures/laplacian_matrix.zig");
 
+pub const data_structures = struct {
+    pub const AdjacencyList = @import("lib/data_structures/adjacency_list.zig");
+    pub const AdjacencyMatrix = @import("lib/data_structures/adjacency_matrix.zig");
+    pub const IncidenceMatrix = @import("lib/data_structures/incidence_matrix.zig");
+};
 // // ✅ Graph Formats (Serialization & Parsing)
 // pub const ZGraphFormat = @import("lib/formats/zgraph.zig");
 // pub const JSONFormat = @import("lib/formats/json.zig");
